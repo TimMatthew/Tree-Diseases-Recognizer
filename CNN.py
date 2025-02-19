@@ -1,35 +1,50 @@
 import time
+
 import matplotlib
 import matplotlib.pyplot as plt
+import seaborn as sns
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision.models as models
-import torchvision.transforms as transforms
-from torch import cuda
-import numpy as np
-import seaborn as sns
 from sklearn.metrics import confusion_matrix
+from torch import cuda
 
-from constants import LR, DECAY, NUM_EPOCHS
+from constants import LR, DECAY, NUM_EPOCHS, last_trainable_layers
 
 matplotlib.use('TkAgg')
 
 
-# class ConvNet(nn.Module):
-#     def __init__(self):
-#         super(ConvNet, self).__init__()
+# Fine tuning
+
 
 def deploy_cnn(train_set):
     efficient_net = models.efficientnet_b3(weights=models.EfficientNet_B3_Weights.DEFAULT)
 
-    # for param in efficient_net.parameters():
+
+    print("-------LAST ", last_trainable_layers, " LAYERS BEFORE FC-------\n",
+          efficient_net.features[-last_trainable_layers:])
+    print("-------AVG POOLING-------\n", efficient_net.avgpool)
+    print("-------FULLY-CONNECTED-------\n", efficient_net.classifier)
+
+    # # Трейн - 95% Валід - 93%
+    # # Freeze all feature layers except for 2 last
+    # for param in efficient_net.features[0:-last_trainable_layers].parameters():
     #     param.requires_grad = False
+    #
+    # # Keep 2 last layers trainable
+    # for param in efficient_net.features[-last_trainable_layers:].parameters():
+    #     param.requires_grad = True
+    #
+    # # Keep AdaptiveAvgPool2d trainable
+    # for param in efficient_net.avgpool.parameters():
+    #     param.requires_grad = True
 
     classes_num = len(train_set.classes)
-    print(classes_num)
+    # print(classes_num)
 
     efficient_net.classifier[1] = nn.Linear(efficient_net.classifier[1].in_features, classes_num)
+
     device = 'cuda' if cuda.is_available() else 'cpu'
     print(device)
 
@@ -40,7 +55,10 @@ def train(model, train_loader, valid_loader):
     device = 'cuda' if cuda.is_available() else 'cpu'
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adamax(model.parameters(), lr=LR, weight_decay=DECAY)
+    # optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=DECAY)
+
+    FC_optimizer = optim.Adam(model.classifier.parameters(), lr=LR, weight_decay=DECAY)
+    backbone_optimizer = optim.Adam(model.features.parameters(), lr=1e-5, weight_decay=1e-6)
 
     train_losses = []
     train_accs = []
@@ -63,12 +81,14 @@ def train(model, train_loader, valid_loader):
             print(f"{epoch + 1} epoch processing training... {process}")
             inputs, labels = inputs.to(device), labels.to(device)
 
-            optimizer.zero_grad()
+            backbone_optimizer.zero_grad()
+            FC_optimizer.zero_grad()
 
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
-            optimizer.step()
+            backbone_optimizer.step()
+            FC_optimizer.step()
 
             running_loss += loss.item()
             _, predicted = outputs.max(1)
@@ -82,7 +102,7 @@ def train(model, train_loader, valid_loader):
                          f"Training Accuracy: {epoch_acc:.4f}%, "
                          f"Loss: {epoch_loss:.4f}")
 
-        #print(train_results)
+        # print(train_results)
 
         train_accs.append(epoch_acc)
         train_losses.append(epoch_loss)
@@ -111,7 +131,7 @@ def train(model, train_loader, valid_loader):
             valid_results = (f"\n                     Validation Accuracy: {epoch_acc:.4f}%, "
                              f"Loss: {epoch_loss:.4f}")
 
-            #print(valid_results)
+            # print(valid_results)
 
             results.append(train_results + valid_results)
 

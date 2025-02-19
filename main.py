@@ -4,7 +4,7 @@ from CNN import deploy_cnn, train, test
 from dataset_preprocessing import create_dataset
 from draft import numbers_of_files
 
-from constants import (PATH_TRAIN, PATH_TEST, PATH_VALID, AUGMENT_TRANSFORM_SUNFLOWER as aug,
+from constants import (PATH_TRAIN, PATH_TEST, PATH_VALID, AUGMENT_TRANSFORM as aug,
                        NO_AUGMENT_TRANSFORM as no_aug)
 
 import os
@@ -22,7 +22,7 @@ if __name__ == '__main__':
     numbers_of_files(PATH_TEST)
 
     # Initializing a training, validation and testing set
-    train_set = create_dataset(PATH_TRAIN, aug)
+    train_set = create_dataset(PATH_TRAIN, no_aug)
     valid_set = create_dataset(PATH_VALID, no_aug)
     test_set = create_dataset(PATH_TEST, no_aug)
 
@@ -39,6 +39,7 @@ if __name__ == '__main__':
     # CNN DEPLOYING
     conv_net = deploy_cnn(train_set)
 
+    print(conv_net)
     summary(conv_net, (3, 300, 300))
 
     # TRAINING AND VALIDATING
