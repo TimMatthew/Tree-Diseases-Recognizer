@@ -1,18 +1,13 @@
+import torchvision.models as models
 from torch.utils.data import DataLoader
-from torchsummary import summary
-from CNN import deploy_cnn, train, test
-from dataset_preprocessing import create_dataset
-from draft import numbers_of_files
+from torchvision import datasets
 
 from constants import (PATH_TRAIN, PATH_TEST, PATH_VALID, AUGMENT_TRANSFORM as aug,
                        NO_AUGMENT_TRANSFORM as no_aug)
-
-import os
+from extra import numbers_of_files
+from training import deploy_cnn, deploy_custom_cnn, train, test, deploy_fine_tuned_cnn
 
 if __name__ == '__main__':
-    # os.rename(r"C:\Users\tymop\OneDrive\Робочий стіл\Курсова\EfficientNet results\B3\thunder-124463.wav",
-    # r"C:\Users\tymop\OneDrive\Робочий стіл\Reaper projects\There is no tomorrow\thunder-124463.wav")
-
     # PREPROCESSING
     print("TRAIN")
     numbers_of_files(PATH_TRAIN)
@@ -22,9 +17,9 @@ if __name__ == '__main__':
     numbers_of_files(PATH_TEST)
 
     # Initializing a training, validation and testing set
-    train_set = create_dataset(PATH_TRAIN, no_aug)
-    valid_set = create_dataset(PATH_VALID, no_aug)
-    test_set = create_dataset(PATH_TEST, no_aug)
+    train_set = datasets.ImageFolder(PATH_TRAIN, aug)
+    valid_set = datasets.ImageFolder(PATH_VALID, no_aug)
+    test_set = datasets.ImageFolder(PATH_TEST, no_aug)
 
     print("\nTraining part: ", len(train_set.samples))
     print("Validating part: ", len(valid_set.samples))
@@ -36,14 +31,26 @@ if __name__ == '__main__':
 
     print(test_set.classes)
 
-    # CNN DEPLOYING
-    conv_net = deploy_cnn(train_set)
+    # EFFICIENT NET DEPLOYING
+    eff_cnn = deploy_cnn(train_set, models.efficientnet_b3, models.EfficientNet_B3_Weights.DEFAULT)
+    differ_rate_cnn = deploy_cnn(train_set, models.efficientnet_b3, models.EfficientNet_B3_Weights.DEFAULT)
+    # fine_tuned_cnn = deploy_fine_tuned_cnn(train_set, models.efficientnet_b3, models.EfficientNet_B3_Weights.DEFAULT)
+    # print(conv_net)
+    # summary(conv_net, (3, 300, 300))
 
-    print(conv_net)
-    summary(conv_net, (3, 300, 300))
+    # SCRATCH CNN DEPLOYING
+    # scratch_cnn = deploy_custom_cnn()
 
-    # TRAINING AND VALIDATING
-    conv_net = train(conv_net, train_loader, valid_loader)
+    # TRAINING AND VALIDATING EFFICIENT NET
+    # eff_net = train(eff_cnn, train_loader, valid_loader, False)
+    differ_rate_net = train(differ_rate_cnn, train_loader, valid_loader, True)
+    # TRAINING AND VALIDATING SCRATCH NETWORK
+    # scratch_net = train(scratch_cnn, train_loader, valid_loader)
 
-    # TESTING
-    test(conv_net, test_loader, test_set.classes)
+    # TESTING EFFICIENT NET
+    # test(eff_net, test_loader, test_set.classes)
+    test(differ_rate_net, test_loader, test_set.classes)
+    # TESTING SCRATCH NETWORK
+    # test(scratch_net, test_loader, test_set.classes)
+
+
