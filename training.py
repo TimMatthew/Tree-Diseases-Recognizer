@@ -1,4 +1,5 @@
 import time
+
 import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -7,21 +8,16 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.metrics import confusion_matrix
 from torch import cuda
-from torch.cuda.amp import autocast, GradScaler
-from constants import LR, DECAY, NUM_EPOCHS, last_trainable_layers
-from thop import profile
+from torchvision.transforms import transforms
+
 from Custom_CNN import ScratchCNN
+from constants import LR, DECAY, NUM_EPOCHS
 
 matplotlib.use('TkAgg')
 
 
 def deploy_cnn(train_set, model, weights):
     efficient_net = model(weights=weights)
-
-    print("-------LAST ", last_trainable_layers, " LAYERS BEFORE FC-------\n",
-          efficient_net.features[-last_trainable_layers:])
-    print("-------AVG POOLING-------\n", efficient_net.avgpool)
-    print("-------FULLY-CONNECTED-------\n", efficient_net.classifier)
 
     classes_num = len(train_set.classes)
     efficient_net.classifier[1] = nn.Linear(efficient_net.classifier[1].in_features, classes_num)
@@ -32,23 +28,66 @@ def deploy_cnn(train_set, model, weights):
     return efficient_net.to(device)
 
 
-def deploy_fine_tuned_cnn(train_set, model, weights):
+"""
+    4 MBConv (6th Sequential: 4-5 MBConv + 7th Sequential) + AdaptiveAvgPool2d + FC layers are tuned
+"""
+
+
+def deploy_fine_tuned_cnn_4_layers(train_set, model, weights):
     efficient_net = model(weights=weights)
 
-    print("-------LAST ", last_trainable_layers, " LAYERS BEFORE FC-------\n",
-          efficient_net.features[-last_trainable_layers:])
-    print("-------AVG POOLING-------\n", efficient_net.avgpool)
-    print("-------FULLY-CONNECTED-------\n", efficient_net.classifier)
-
-    # Freeze all feature layers except for 2 last
-    for param in efficient_net.features[0:-last_trainable_layers].parameters():
+    for param in efficient_net.features[0:-3].parameters():
         param.requires_grad = False
 
-    # Keep 2 last MBConv layers trainable
-    for param in efficient_net.features[-last_trainable_layers:].parameters():
+    for params in efficient_net.features[-3][-2:].parameters():
+        params.requires_grad = True
+
+    for param in efficient_net.features[-2:].parameters():
         param.requires_grad = True
 
-    # Keep AdaptiveAvgPool2d trainable
+    for param in efficient_net.avgpool.parameters():
+        param.requires_grad = True
+
+    classes_num = len(train_set.classes)
+
+    efficient_net.classifier[1] = nn.Linear(efficient_net.classifier[1].in_features, classes_num)
+
+    device = 'cuda' if cuda.is_available() else 'cpu'
+    print(device)
+
+    return efficient_net.to(device)
+
+
+def deploy_feature_extractor(train_set, model, weights):
+    efficient_net = model(weights=weights)
+
+    classes_num = len(train_set.classes)
+
+    for param in efficient_net.parameters():
+        param.requires_grad = False
+
+    efficient_net.classifier[1] = nn.Linear(efficient_net.classifier[1].in_features, classes_num)
+
+    device = 'cuda' if cuda.is_available() else 'cpu'
+    print(device)
+
+    return efficient_net.to(device)
+
+
+"""
+    2 MBConv (7th Sequential) layers + AdaptiveAvgPool2d + FC layers are tuned
+"""
+
+
+def deploy_fine_tuned_cnn_2_layers(train_set, model, weights):
+    efficient_net = model(weights=weights)
+
+    for param in efficient_net.features[0:-2].parameters():
+        param.requires_grad = False
+
+    for param in efficient_net.features[-2:].parameters():
+        param.requires_grad = True
+
     for param in efficient_net.avgpool.parameters():
         param.requires_grad = True
 
@@ -72,10 +111,14 @@ def train(model, train_loader, valid_loader, is_differ_rates):
     device = 'cuda' if cuda.is_available() else 'cpu'
 
     criterion = nn.CrossEntropyLoss()
-    # optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=DECAY)
 
-    FC_optimizer = optim.Adam(model.classifier.parameters(), lr=LR, weight_decay=DECAY)
-    backbone_optimizer = optim.Adam(model.features.parameters(), lr=1e-5, weight_decay=1e-6)
+    optimizer, FC_optimizer, backbone_optimizer = None, None, None
+
+    if is_differ_rates:
+        FC_optimizer = optim.Adam(model.classifier.parameters(), lr=LR, weight_decay=DECAY)
+        backbone_optimizer = optim.Adam(model.features.parameters(), lr=1e-5, weight_decay=1e-6)
+    else:
+        optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=DECAY)
 
     train_losses = []
     train_accs = []
@@ -98,14 +141,21 @@ def train(model, train_loader, valid_loader, is_differ_rates):
             print(f"{epoch + 1} epoch processing training... {process}")
             inputs, labels = inputs.to(device), labels.to(device)
 
-            backbone_optimizer.zero_grad()
-            FC_optimizer.zero_grad()
+            if is_differ_rates:
+                backbone_optimizer.zero_grad()
+                FC_optimizer.zero_grad()
+            else:
+                optimizer.zero_grad()
 
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
-            backbone_optimizer.step()
-            FC_optimizer.step()
+
+            if is_differ_rates:
+                backbone_optimizer.step()
+                FC_optimizer.step()
+            else:
+                optimizer.step()
 
             running_loss += loss.item()
             _, predicted = outputs.max(1)
@@ -147,8 +197,6 @@ def train(model, train_loader, valid_loader, is_differ_rates):
 
             valid_results = (f"\n                     Validation Accuracy: {epoch_acc:.4f}%, "
                              f"Loss: {epoch_loss:.4f}")
-
-            # print(valid_results)
 
             results.append(train_results + valid_results)
 
@@ -222,22 +270,23 @@ def show_stats(train_accs, train_losses, valid_accs, valid_losses):
     plt.legend()
     plt.show()
 
-# def test_image(model, test_set, tensor_num):
-#     device = 'cuda' if cuda.is_available() else 'cpu'
-#
-#     test_model = model.to(device)
-#
-#     img_tensor, actual_label = test_set[tensor_num]
-#     to_pil = transforms.ToPILImage()
-#     image_to_test = to_pil(img_tensor)
-#     img_tensor = img_tensor.unsqueeze(0).to(device)
-#
-#     with torch.no_grad():
-#         outputs = test_model(img_tensor)
-#
-#     _, predicted_class = torch.max(outputs.data, 1)
-#     predicted_class_name = test_set.classes[predicted_class.item()]
-#
-#     print(f"Actual: {test_set.classes[actual_label]}")
-#     print(f"Predicted: {predicted_class_name}\n")
-#     image_to_test.show()
+
+def test_image(model, test_set, tensor_num):
+    device = 'cuda' if cuda.is_available() else 'cpu'
+
+    test_model = model.to(device)
+
+    img_tensor, actual_label = test_set[tensor_num]
+    to_pil = transforms.ToPILImage()
+    image_to_test = to_pil(img_tensor)
+    img_tensor = img_tensor.unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        outputs = test_model(img_tensor)
+
+    _, predicted_class = torch.max(outputs.data, 1)
+    predicted_class_name = test_set.classes[predicted_class.item()]
+
+    print(f"Actual: {test_set.classes[actual_label]}")
+    print(f"Predicted: {predicted_class_name}\n")
+    image_to_test.show()

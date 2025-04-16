@@ -3,7 +3,6 @@ import os
 import shutil
 
 
-# 'C:\Users\tymop\OneDrive\Робочий стіл\Курсова\dataset\train'
 def numbers_of_files(directory):
     subdirs = os.listdir(directory)
 
@@ -34,7 +33,7 @@ def replace_underlines_in_files(parent_dir):
 
 
 def transfer_images_from_train_valid(train_dir, valid_dir, is_to_valid):
-    diseases = os.listdir(train_dir)  # can be valid - directories are same in both
+    diseases = os.listdir(train_dir)
     images_to_transfer = []
 
     for disease_dir in diseases:
